@@ -135,6 +135,20 @@ describe("Marketplace", function () {
             await expect(marketplace.connect(users[1]).buyNft(erc20.address, erc721.address, NFT_ID))
                 .to.be.revertedWith("Nft cannot be bought due to sale deadline") 
         });
+        it("user can unlist nft from the marketplace", async () => {
+            const NFT_ID = 1
+            const NFT_PRICE = 1e8 // 1 usd with decimal 8
+            await erc721.mint(users[0].address, NFT_ID)
+            await erc721.connect(users[0]).approve(marketplace.address, NFT_ID)
+
+            const SALE_DEAD_LINE = (await ethers.provider.getBlock("latest")).timestamp + 24*3600
+            
+            await marketplace.connect(users[0]).listNft(erc721.address, NFT_ID, NFT_PRICE, SALE_DEAD_LINE)
+            
+            await marketplace.connect(users[0]).unlistNft(erc721.address, NFT_ID)
+   
+
+        });
 
     });
 

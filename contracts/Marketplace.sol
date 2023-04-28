@@ -73,8 +73,16 @@ contract Marketplace is OwnableUpgradeable {
         uint256 nftPriceInTokens =  nftPrice[_nftContract][_nftId] / paymentTokenPrice * 1e18;
 
         IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, address(this), nftPriceInTokens);
-        nftPrice[_nftContract][_nftId] = 0;
         IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
+        
+        deleteNft(_nftContract, _nftId);
+    }
+
+    function unlistNft(address _nftContract, uint256 _nftId) external{
+        require(nftOwner[_nftContract][_nftId] == msg.sender, "You are not the owner of this nft");
+        IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
+
+        deleteNft(_nftContract, _nftId);
     }
 
     function setPaymentToken(address _token, address _oracle, bool _isPaymentToken) external onlyOwner{
@@ -95,6 +103,12 @@ contract Marketplace is OwnableUpgradeable {
 
     function setMarketplaceFee(uint256 _fee) external onlyOwner{
         sellFee  = _fee;
+    }
+
+    function deleteNft(address _nftContract, uint256 _nftId) internal {
+        delete nftPrice[_nftContract][_nftId];
+        delete nftSaleDeadline[_nftContract][_nftId];
+        delete nftOwner[_nftContract][_nftId];
     }
 
 }
