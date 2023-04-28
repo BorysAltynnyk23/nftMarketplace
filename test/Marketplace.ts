@@ -75,7 +75,6 @@ describe("Marketplace", function () {
                 .withArgs(users[0].address, erc721.address, NFT_ID, NFT_PRICE) 
 
             expect(await erc721.ownerOf(NFT_ID)).to.be.eq(marketplace.address)
-            
         });
         it("user can buy nft from the marketplace", async () => {
             const NFT_ID = 1
@@ -114,6 +113,27 @@ describe("Marketplace", function () {
             await erc20.connect(users[1]).increaseAllowance(marketplace.address, AMOUNT_ERC20.sub(1))
             await expect(marketplace.connect(users[1]).buyNft(erc20.address, erc721.address, NFT_ID))
                 .to.be.revertedWith("ERC20: insufficient allowance") 
+        });
+        it("user cannot buy nft from the marketplace after nft sale deadline", async () => {
+            const NFT_ID = 1
+            // const NFT_PRICE = 1e8 // 1 usd with decimal 8
+            const NFT_PRICE = ethers.BigNumber.from(100e8); // 100 USDT
+            await erc721.mint(users[0].address, NFT_ID)
+            await erc721.connect(users[0]).approve(marketplace.address, NFT_ID)
+
+            const SALE_DEAD_LINE = (await ethers.provider.getBlock("latest")).timestamp + 24*3600
+            await marketplace.connect(users[0]).listNft(erc721.address, NFT_ID, NFT_PRICE, SALE_DEAD_LINE)
+
+            const ERC20_RATE = await marketplace.getTokenPrice(erc20.address)
+            const AMOUNT_ERC20 = NFT_PRICE.div(ERC20_RATE).mul(ERC20_DECIMALS)
+            
+            await erc20.mint(users[1].address, AMOUNT_ERC20)
+            await erc20.connect(users[1]).increaseAllowance(marketplace.address, AMOUNT_ERC20)
+
+            await time.increase(24*3600)
+
+            await expect(marketplace.connect(users[1]).buyNft(erc20.address, erc721.address, NFT_ID))
+                .to.be.revertedWith("Nft cannot be bought due to sale deadline") 
         });
 
     });

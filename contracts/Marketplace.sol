@@ -18,6 +18,7 @@ contract Marketplace is OwnableUpgradeable {
     
     /// @dev NFT Contract => NFT ID => Price in USD
     mapping(address => mapping(uint256 => uint256)) public nftPrice;
+    mapping(address => mapping(uint256 => uint256)) public nftSaleDeadline;
     mapping(address => mapping(uint256 => address)) public nftOwner;
     mapping(address => bool) public isPaymentToken;
 
@@ -49,6 +50,7 @@ contract Marketplace is OwnableUpgradeable {
         IERC721Upgradeable(_nftContract).transferFrom(msg.sender, address(this), _nftId);
         nftPrice[_nftContract][_nftId] = _nftPrice;
         nftOwner[_nftContract][_nftId] = msg.sender;
+        nftSaleDeadline[_nftContract][_nftId] = _saleDeadLine;
         emit NftIsListed(msg.sender, _nftContract, _nftId, _nftPrice);
     }
 
@@ -64,6 +66,7 @@ contract Marketplace is OwnableUpgradeable {
     function buyNft(address _tokenOfPayment, address _nftContract, uint256 _nftId) external{
         require(nftPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace");
         require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
+        require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought due to sale deadline");
 
         uint256 paymentTokenPrice = uint256(getTokenPrice(_tokenOfPayment)); // Token / USD 
 
