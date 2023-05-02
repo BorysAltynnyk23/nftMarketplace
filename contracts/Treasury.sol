@@ -10,6 +10,13 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 
 contract Treasury is OwnableUpgradeable {
+    receive() external payable{
+
+    }
+    
+    fallback() external payable{
+
+    }
    
 }
 

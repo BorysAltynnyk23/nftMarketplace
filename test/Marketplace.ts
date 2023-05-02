@@ -75,7 +75,6 @@ describe("Marketplace", function () {
 
     afterEach(async () => await snapshotA.restore())
 
-
     describe("", function () {
         it("user can list nft on the marketplace", async () => {
             const NFT_ID = 1
@@ -109,7 +108,7 @@ describe("Marketplace", function () {
             await marketplace.connect(users[1]).buyNft(erc20.address, erc721.address, NFT_ID)
 
             expect(await erc20.balanceOf(users[1].address)).to.be.eq(0)
-            expect(await erc20.balanceOf(marketplace.address)).to.be.eq(AMOUNT_ERC20.mul(MARKETPLACE_FEE).div(100))
+            expect(await erc20.balanceOf(treasury.address)).to.be.eq(AMOUNT_ERC20.mul(MARKETPLACE_FEE).div(100))
             expect(await erc20.balanceOf(users[0].address)).to.be.eq(AMOUNT_ERC20.mul(100 - MARKETPLACE_FEE).div(100))
         });
         it("user can buy nft from the marketplace with ether", async () => {
@@ -149,7 +148,7 @@ describe("Marketplace", function () {
                 .to.be.eq(
                     BUYER_BALANCE_BEFORE.sub(GAS_USED_BUYING).sub(AMOUNT_ETHER)
                 )
-            expect(await ethers.provider.getBalance(marketplace.address)).to.be.eq(AMOUNT_ETHER.mul(MARKETPLACE_FEE).div(100))
+            expect(await ethers.provider.getBalance(treasury.address)).to.be.eq(AMOUNT_ETHER.mul(MARKETPLACE_FEE).div(100))
 
             expect(await erc721.ownerOf(NFT_ID)).to.be.eq(users[1].address)
         });
@@ -190,7 +189,7 @@ describe("Marketplace", function () {
                 .to.be.eq(
                     BUYER_BALANCE_BEFORE.sub(GAS_USED_BUYING).sub(AMOUNT_ETHER)
                 )
-            expect(await ethers.provider.getBalance(marketplace.address)).to.be.eq(AMOUNT_ETHER.mul(MARKETPLACE_FEE).div(100))
+            expect(await ethers.provider.getBalance(treasury.address)).to.be.eq(AMOUNT_ETHER.mul(MARKETPLACE_FEE).div(100))
 
             expect(await erc721.ownerOf(NFT_ID)).to.be.eq(users[1].address)
         });
@@ -247,8 +246,6 @@ describe("Marketplace", function () {
    
 
         });
-
-
         it("place bet", async () => {
             const NFT_ID = 1
         
@@ -298,8 +295,7 @@ describe("Marketplace", function () {
             console.log(await marketplace.getBets(erc721.address, NFT_ID))
 
         });
-
-        it.only("cancel bet [multiple bets]", async () => {
+        it("cancel bet [multiple bets]", async () => {
             const NFT_ID = 1
         
             const START_PRICE = ethers.BigNumber.from(100e8); // 100 USDT
@@ -331,7 +327,7 @@ describe("Marketplace", function () {
             console.log(await marketplace.getBets(erc721.address, NFT_ID))
 
         });
-        it.only("user cannot cancel other user bet", async () => {
+        it("user cannot cancel other user bet", async () => {
             const NFT_ID = 1
         
             const START_PRICE = ethers.BigNumber.from(100e8); // 100 USDT
@@ -357,6 +353,25 @@ describe("Marketplace", function () {
             await expect(
                 marketplace.connect(users[1]).cancelBet(BET_ID, erc721.address, NFT_ID)
             ).to.be.revertedWith("It is not your bet")    
+        });
+        it("user cannot bet for NFT which is not on action but on sale", async () => {
+            const NFT_ID = 1
+            // const NFT_PRICE = 1e8 // 1 usd with decimal 8
+            const NFT_PRICE = ethers.BigNumber.from(100e8); // 100 USDT
+            await erc721.mint(users[0].address, NFT_ID)
+            await erc721.connect(users[0]).approve(marketplace.address, NFT_ID)
+
+            const SALE_DEAD_LINE = (await ethers.provider.getBlock("latest")).timestamp + 24*3600
+            await marketplace.connect(users[0]).listNft(erc721.address, NFT_ID, NFT_PRICE, SALE_DEAD_LINE)
+
+            const ERC20_RATE = await marketplace.getTokenPrice(erc20.address)
+            const AMOUNT_ERC20 = NFT_PRICE.mul(ERC20_DECIMALS).div(ERC20_RATE)
+            
+            await erc20.mint(users[1].address, AMOUNT_ERC20)
+            await erc20.connect(users[1]).increaseAllowance(marketplace.address, AMOUNT_ERC20)
+            await expect(
+                marketplace.connect(users[1]).placeBet(erc20.address, AMOUNT_ERC20, erc721.address, NFT_ID)
+            ).to.be.revertedWith("NFT is not on marketplace auction")
         });
 
     });

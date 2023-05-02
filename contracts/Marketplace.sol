@@ -55,10 +55,11 @@ contract Marketplace is OwnableUpgradeable {
      *
      * @param _nftContract nft contract
      * @param _nftId nft id
-     * @param _nftPrice nft price in USD
+     * @param _nftPrice nft price in USD 8 decimals
      * @param _saleDeadLine moment in future before nft can be sold
      */
     function listNft(address _nftContract, uint256 _nftId, uint256 _nftPrice, uint256 _saleDeadLine) external{
+        require(_nftPrice != 0, "Start price cannot be zero");
         IERC721Upgradeable(_nftContract).transferFrom(msg.sender, address(this), _nftId);
         nftPrice[_nftContract][_nftId] = _nftPrice;
         nftOwner[_nftContract][_nftId] = msg.sender;
@@ -74,6 +75,7 @@ contract Marketplace is OwnableUpgradeable {
     }
 
     function listNftForAuction(address _nftContract, uint256 _nftId, uint256 _startPrice, uint256 _auctionDeadLine) external{
+        require(_startPrice != 0, "Start price cannot be zero");
         IERC721Upgradeable(_nftContract).transferFrom(msg.sender, address(this), _nftId);
         auctionStartPrice[_nftContract][_nftId] = _startPrice;
         nftOwner[_nftContract][_nftId] = msg.sender;
@@ -97,7 +99,7 @@ contract Marketplace is OwnableUpgradeable {
         uint256 nftPriceInTokens =  nftPrice[_nftContract][_nftId] / paymentTokenPrice * 10**ERC20Upgradeable(_tokenOfPayment).decimals();
         uint256 fee = nftPriceInTokens * sellFee / PRECISION;
 
-        IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, address(this), fee);
+        IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, treasury, fee);
 
         IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, nftOwner[_nftContract][_nftId], nftPriceInTokens - fee);
 
@@ -105,6 +107,40 @@ contract Marketplace is OwnableUpgradeable {
 
         deleteNft(_nftContract, _nftId);
     }
+
+    // @dev you have to pass oracle address for ETH/USDT 
+    function buyNftWithEther(address _tokenOfPayment, address _nftContract, uint256 _nftId) external payable{
+        require(nftPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace");
+        require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
+        require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought after sale deadline");
+
+        uint256 etherPrice = uint256(getTokenPrice(_tokenOfPayment)); //  USD/Token 
+
+        uint256 nftPriceInEther =  nftPrice[_nftContract][_nftId] * 10**18 / etherPrice ;
+        require(msg.value >= nftPriceInEther, "Not enough ether to by nft");
+        uint256 fee = nftPriceInEther * sellFee / PRECISION;
+        // address.transfer(amount);
+        address payable owner = payable(nftOwner[_nftContract][_nftId]);
+        bool sent;
+        bytes memory data;
+        ( sent, data) = owner.call{value: nftPriceInEther - fee}("");
+        require(sent, "Failed to send Ether");
+        
+        ( sent, data) = treasury.call{value: fee}("");
+        require(sent, "Failed to send Ether");
+
+        if(msg.value > nftPriceInEther){
+            address payable buyer = payable(msg.sender);
+
+            (sent, data) = buyer.call{value: msg.value - nftPriceInEther}("");
+            require(sent, "Failed to send Ether");
+        }
+
+        IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
+
+        deleteNft(_nftContract, _nftId);
+    }
+
     /**
      * @notice Let user place bet for NFT auction
      *
@@ -129,6 +165,16 @@ contract Marketplace is OwnableUpgradeable {
         IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, address(this), _bet);
     }
 
+    function cancelBet(uint256 _betId, address _nftContract, uint256 _nftId) external{
+        require(bets[_nftContract][_nftId][_betId].bettor == msg.sender, "It is not your bet");
+
+        Bet storage bet = bets[_nftContract][_nftId][_betId];
+
+        IERC20Upgradeable(bet.tokenContract).transfer(bet.bettor, bet.tokenAmount);
+
+        deleteBet(_nftContract, _nftId, _betId);
+    }
+
     function acceptBet(uint256 _betId, address _nftContract, uint256 _nftId) external{
         require(nftOwner[_nftContract][_nftId] == msg.sender, "You are not nft owner");
 
@@ -142,42 +188,6 @@ contract Marketplace is OwnableUpgradeable {
         IERC721Upgradeable(_nftContract).transferFrom(address(this), bet.bettor, _nftId);
         deleteNftFromAuction(_nftContract, _nftId, _betId);
 
-    }
-
-    function cancelBet(uint256 _betId, address _nftContract, uint256 _nftId) external{
-        require(bets[_nftContract][_nftId][_betId].bettor == msg.sender, "It is not your bet");
-
-        Bet storage bet = bets[_nftContract][_nftId][_betId];
-
-        IERC20Upgradeable(bet.tokenContract).transfer(bet.bettor, bet.tokenAmount);
-
-        deleteBet(_nftContract, _nftId, _betId);
-    }
-    
-    // @dev you have to pass oracle address for ETH/USDT 
-    function buyNftWithEther(address _tokenOfPayment, address _nftContract, uint256 _nftId) external payable{
-        require(nftPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace");
-        require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
-        require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought after sale deadline");
-
-        uint256 etherPrice = uint256(getTokenPrice(_tokenOfPayment)); //  USD/Token 
-
-        uint256 nftPriceInEther =  nftPrice[_nftContract][_nftId] * 10**18 / etherPrice ;
-        require(msg.value >= nftPriceInEther, "Not enough ether to by nft");
-        uint256 fee = nftPriceInEther * sellFee / PRECISION;
-
-        // address.transfer(amount);
-        address payable owner = payable(nftOwner[_nftContract][_nftId]);
-        owner.transfer(nftPriceInEther - fee);
-
-        if(msg.value > nftPriceInEther){
-            address payable buyer = payable(msg.sender);
-            buyer.transfer(msg.value - nftPriceInEther);
-        }
-
-        IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
-
-        deleteNft(_nftContract, _nftId);
     }
 
     function setPaymentToken(address _token, address _oracle, bool _isPaymentToken) external onlyOwner{
@@ -204,6 +214,7 @@ contract Marketplace is OwnableUpgradeable {
         treasury  = _treasury;
     }
     // _______________ Internal functions _______________
+
     function deleteNft(address _nftContract, uint256 _nftId) internal {
         delete nftPrice[_nftContract][_nftId];
         delete nftSaleDeadline[_nftContract][_nftId];
@@ -216,7 +227,6 @@ contract Marketplace is OwnableUpgradeable {
         delete auctionDeadline[_nftContract][_nftId];
         
         deleteBet(_nftContract, _nftId, _betId);
-
     }
 
     function deleteBet(address _nftContract, uint256 _nftId, uint256 _betId) internal{
