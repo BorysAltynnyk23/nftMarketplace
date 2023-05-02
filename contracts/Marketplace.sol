@@ -5,16 +5,16 @@ pragma solidity 0.8.17;
 import "hardhat/console.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
-
-
 
 contract Marketplace is OwnableUpgradeable {
     // _______________ Storage _______________
     string private greeting;
     uint256 public sellFee;
+    uint256 public constant PRECISION = 10000;
     
     /// @dev NFT Contract => NFT ID => Price in USD
     mapping(address => mapping(uint256 => uint256)) public nftPrice;
@@ -23,7 +23,6 @@ contract Marketplace is OwnableUpgradeable {
     mapping(address => bool) public isPaymentToken;
 
     mapping(address => AggregatorV3Interface) public tokenToOracle;
-
 
     // _______________ Events _______________
     /// @dev Emitted when user offer nft for sale on marketplace
@@ -62,19 +61,47 @@ contract Marketplace is OwnableUpgradeable {
      * @param _nftId nft id
      * 
      */
-
     function buyNft(address _tokenOfPayment, address _nftContract, uint256 _nftId) external{
         require(nftPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace");
         require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
         require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought due to sale deadline");
 
-        uint256 paymentTokenPrice = uint256(getTokenPrice(_tokenOfPayment)); // Token / USD 
+        uint256 paymentTokenPrice = uint256(getTokenPrice(_tokenOfPayment)); //  USD/Token 
+        uint256 nftPriceInTokens =  nftPrice[_nftContract][_nftId] / paymentTokenPrice * 10**ERC20Upgradeable(_tokenOfPayment).decimals();
+        uint256 fee = nftPriceInTokens * sellFee / PRECISION;
 
-        uint256 nftPriceInTokens =  nftPrice[_nftContract][_nftId] / paymentTokenPrice * 1e18;
+        IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, address(this), fee);
 
-        IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, address(this), nftPriceInTokens);
+        IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, nftOwner[_nftContract][_nftId], nftPriceInTokens - fee);
+
         IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
-        
+
+        deleteNft(_nftContract, _nftId);
+    }
+    
+    // @dev you have to pass oracle address for ETH/USDT 
+    function buyNftWithEther(address _tokenOfPayment, address _nftContract, uint256 _nftId) external payable{
+        require(nftPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace");
+        require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
+        require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought due to sale deadline");
+
+        uint256 etherPrice = uint256(getTokenPrice(_tokenOfPayment)); //  USD/Token 
+
+        uint256 nftPriceInEther =  nftPrice[_nftContract][_nftId] * 10**18 / etherPrice ;
+        require(msg.value >= nftPriceInEther, "Not enough ether to by nft");
+        uint256 fee = nftPriceInEther * sellFee / PRECISION;
+
+        // address.transfer(amount);
+        address payable owner = payable(nftOwner[_nftContract][_nftId]);
+        owner.transfer(nftPriceInEther - fee);
+
+        if(msg.value > nftPriceInEther){
+            address payable buyer = payable(msg.sender);
+            buyer.transfer(msg.value - nftPriceInEther);
+        }
+
+        IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
+
         deleteNft(_nftContract, _nftId);
     }
 
