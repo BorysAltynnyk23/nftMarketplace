@@ -11,15 +11,28 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 contract Marketplace is OwnableUpgradeable {
+    //________________ Structs ______________
+    struct Bet { 
+    address bettor;
+    address tokenContract;
+    uint256 tokenAmount;
+    }
     // _______________ Storage _______________
     string private greeting;
     uint256 public sellFee;
     uint256 public constant PRECISION = 10000;
+    address public treasury;
     
     /// @dev NFT Contract => NFT ID => Price in USD
     mapping(address => mapping(uint256 => uint256)) public nftPrice;
+    mapping(address => mapping(uint256 => uint256)) public auctionStartPrice;
     mapping(address => mapping(uint256 => uint256)) public nftSaleDeadline;
+    mapping(address => mapping(uint256 => uint256)) public auctionDeadline;
     mapping(address => mapping(uint256 => address)) public nftOwner;
+    
+    /// @dev NFT Contract => NFT ID => bet
+    mapping(address => mapping(uint256 => Bet[])) public bets;
+
     mapping(address => bool) public isPaymentToken;
 
     mapping(address => AggregatorV3Interface) public tokenToOracle;
@@ -38,7 +51,7 @@ contract Marketplace is OwnableUpgradeable {
 
     // _______________ External functions _______________
     /**
-     * @notice Let user lsit NFT for sale on marketplace
+     * @notice Let user list NFT for sale on marketplace
      *
      * @param _nftContract nft contract
      * @param _nftId nft id
@@ -52,6 +65,20 @@ contract Marketplace is OwnableUpgradeable {
         nftSaleDeadline[_nftContract][_nftId] = _saleDeadLine;
         emit NftIsListed(msg.sender, _nftContract, _nftId, _nftPrice);
     }
+    
+    function unlistNft(address _nftContract, uint256 _nftId) external{
+        require(nftOwner[_nftContract][_nftId] == msg.sender, "You are not the owner of this nft");
+        IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
+
+        deleteNft(_nftContract, _nftId);
+    }
+
+    function listNftForAuction(address _nftContract, uint256 _nftId, uint256 _startPrice, uint256 _auctionDeadLine) external{
+        IERC721Upgradeable(_nftContract).transferFrom(msg.sender, address(this), _nftId);
+        auctionStartPrice[_nftContract][_nftId] = _startPrice;
+        nftOwner[_nftContract][_nftId] = msg.sender;
+        auctionDeadline[_nftContract][_nftId] = _auctionDeadLine;
+    }
 
     /**
      * @notice Let user buy NFT from marketplace
@@ -64,7 +91,7 @@ contract Marketplace is OwnableUpgradeable {
     function buyNft(address _tokenOfPayment, address _nftContract, uint256 _nftId) external{
         require(nftPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace");
         require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
-        require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought due to sale deadline");
+        require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought after sale deadline");
 
         uint256 paymentTokenPrice = uint256(getTokenPrice(_tokenOfPayment)); //  USD/Token 
         uint256 nftPriceInTokens =  nftPrice[_nftContract][_nftId] / paymentTokenPrice * 10**ERC20Upgradeable(_tokenOfPayment).decimals();
@@ -78,12 +105,60 @@ contract Marketplace is OwnableUpgradeable {
 
         deleteNft(_nftContract, _nftId);
     }
+    /**
+     * @notice Let user place bet for NFT auction
+     *
+     * @param _tokenOfPayment token of payment
+     * @param _nftContract nft contract
+     * @param _bet bet in tokens
+     * @param _nftId nft id
+     * 
+     */
+    function placeBet(address _tokenOfPayment, uint256 _bet, address _nftContract, uint256 _nftId) external{
+        require(auctionStartPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace auction");
+        require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
+        require(block.timestamp < auctionDeadline[_nftContract][_nftId], "Bet cannot be placed after deadline");
+
+        uint256 paymentTokenPrice = uint256(getTokenPrice(_tokenOfPayment)); //  USD/Token 
+        uint256 betUsdValue = _bet * paymentTokenPrice / 10**ERC20Upgradeable(_tokenOfPayment).decimals();
+
+        require(betUsdValue >= auctionStartPrice[_nftContract][_nftId], "Bet is too small");
+
+        bets[_nftContract][_nftId].push(Bet( msg.sender, _tokenOfPayment, _bet));
+
+        IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, address(this), _bet);
+    }
+
+    function acceptBet(uint256 _betId, address _nftContract, uint256 _nftId) external{
+        require(nftOwner[_nftContract][_nftId] == msg.sender, "You are not nft owner");
+
+        Bet storage bet = bets[_nftContract][_nftId][_betId];
+        uint256 fee = bet.tokenAmount * sellFee / PRECISION;
+
+        IERC20Upgradeable(bet.tokenContract).transfer(nftOwner[_nftContract][_nftId], bet.tokenAmount - fee);
+        IERC20Upgradeable(bet.tokenContract).transfer(treasury, fee);
+
+        
+        IERC721Upgradeable(_nftContract).transferFrom(address(this), bet.bettor, _nftId);
+        deleteNftFromAuction(_nftContract, _nftId, _betId);
+
+    }
+
+    function cancelBet(uint256 _betId, address _nftContract, uint256 _nftId) external{
+        require(bets[_nftContract][_nftId][_betId].bettor == msg.sender, "It is not your bet");
+
+        Bet storage bet = bets[_nftContract][_nftId][_betId];
+
+        IERC20Upgradeable(bet.tokenContract).transfer(bet.bettor, bet.tokenAmount);
+
+        deleteBet(_nftContract, _nftId, _betId);
+    }
     
     // @dev you have to pass oracle address for ETH/USDT 
     function buyNftWithEther(address _tokenOfPayment, address _nftContract, uint256 _nftId) external payable{
         require(nftPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace");
         require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
-        require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought due to sale deadline");
+        require(block.timestamp < nftSaleDeadline[_nftContract][_nftId], "Nft cannot be bought after sale deadline");
 
         uint256 etherPrice = uint256(getTokenPrice(_tokenOfPayment)); //  USD/Token 
 
@@ -100,13 +175,6 @@ contract Marketplace is OwnableUpgradeable {
             buyer.transfer(msg.value - nftPriceInEther);
         }
 
-        IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
-
-        deleteNft(_nftContract, _nftId);
-    }
-
-    function unlistNft(address _nftContract, uint256 _nftId) external{
-        require(nftOwner[_nftContract][_nftId] == msg.sender, "You are not the owner of this nft");
         IERC721Upgradeable(_nftContract).transferFrom(address(this), msg.sender, _nftId);
 
         deleteNft(_nftContract, _nftId);
@@ -131,11 +199,35 @@ contract Marketplace is OwnableUpgradeable {
     function setMarketplaceFee(uint256 _fee) external onlyOwner{
         sellFee  = _fee;
     }
-
+    
+    function setTreasury(address _treasury) external onlyOwner{
+        treasury  = _treasury;
+    }
+    // _______________ Internal functions _______________
     function deleteNft(address _nftContract, uint256 _nftId) internal {
         delete nftPrice[_nftContract][_nftId];
         delete nftSaleDeadline[_nftContract][_nftId];
         delete nftOwner[_nftContract][_nftId];
     }
 
+    function deleteNftFromAuction(address _nftContract, uint256 _nftId, uint256 _betId) internal {
+        delete auctionStartPrice[_nftContract][_nftId];
+        delete nftOwner[_nftContract][_nftId];
+        delete auctionDeadline[_nftContract][_nftId];
+        
+        deleteBet(_nftContract, _nftId, _betId);
+
+    }
+
+    function deleteBet(address _nftContract, uint256 _nftId, uint256 _betId) internal{
+        Bet [] storage bet = bets[_nftContract][_nftId];
+        bet[_betId] = bet[bet.length - 1];
+        bet.pop(); // works fine even with bet.length == 1
+    }
+
+    function getBets(address _nftContract, uint256 _nftId) external view returns(Bet [] memory) {
+        return bets[_nftContract][_nftId];
+    }
+
 }
+
