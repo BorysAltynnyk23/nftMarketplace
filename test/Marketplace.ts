@@ -69,6 +69,7 @@ describe("Marketplace", function () {
         await marketplace.setTreasury(treasury.address)
         await marketplace.setPaymentToken(erc20.address, oracle.address, true)
         await marketplace.setPaymentToken(oracleEther.address, oracleEther.address, true)
+        await marketplace.setEtherOracle(oracleEther.address)
 
         snapshotA = await takeSnapshot()
     });

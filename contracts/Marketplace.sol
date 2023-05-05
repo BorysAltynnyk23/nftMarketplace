@@ -22,6 +22,7 @@ contract Marketplace is OwnableUpgradeable {
     uint256 public sellFee;
     uint256 public constant PRECISION = 10000;
     address public treasury;
+    address public etherOracle;
     
     /// @dev NFT Contract => NFT ID => Price in USD
     mapping(address => mapping(uint256 => uint256)) public nftPrice;
@@ -155,14 +156,27 @@ contract Marketplace is OwnableUpgradeable {
         require(isPaymentToken[_tokenOfPayment], "Payment token is not supported");
         require(block.timestamp < auctionDeadline[_nftContract][_nftId], "Bet cannot be placed after deadline");
 
+        IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, address(this), _bet);
+
         uint256 paymentTokenPrice = uint256(getTokenPrice(_tokenOfPayment)); //  USD/Token 
         uint256 betUsdValue = _bet * paymentTokenPrice / 10**ERC20Upgradeable(_tokenOfPayment).decimals();
 
         require(betUsdValue >= auctionStartPrice[_nftContract][_nftId], "Bet is too small");
 
         bets[_nftContract][_nftId].push(Bet( msg.sender, _tokenOfPayment, _bet));
+    }
+    // @dev _tokenOfPayment - you have to pass oracle for ether
+    function placeBetEther(address _nftContract, uint256 _nftId) external payable{
+        require(auctionStartPrice[_nftContract][_nftId] != 0, "NFT is not on marketplace auction");
+        require(isPaymentToken[etherOracle], "Payment token is not supported");
+        require(block.timestamp < auctionDeadline[_nftContract][_nftId], "Bet cannot be placed after deadline");
 
-        IERC20Upgradeable(_tokenOfPayment).transferFrom(msg.sender, address(this), _bet);
+        uint256 paymentTokenPrice = uint256(getTokenPrice(etherOracle)); //  USD/Ether 
+        uint256 betUsdValue = msg.value * paymentTokenPrice / 10**18;
+
+        require(betUsdValue >= auctionStartPrice[_nftContract][_nftId], "Bet is too small");
+
+        bets[_nftContract][_nftId].push(Bet( msg.sender, etherOracle, msg.value));
     }
 
     function cancelBet(uint256 _betId, address _nftContract, uint256 _nftId) external{
@@ -174,20 +188,39 @@ contract Marketplace is OwnableUpgradeable {
 
         deleteBet(_nftContract, _nftId, _betId);
     }
+    
+    function cancelBetEther(uint256 _betId, address _nftContract, uint256 _nftId) external{
+        require(bets[_nftContract][_nftId][_betId].bettor == msg.sender, "It is not your bet");
+
+        Bet storage bet = bets[_nftContract][_nftId][_betId];
+
+        (bool sent, bytes memory data) = bet.bettor.call{value: bet.tokenAmount}("");
+        require(sent, "Failed to send Ether");
+
+        deleteBet(_nftContract, _nftId, _betId);
+    }
 
     function acceptBet(uint256 _betId, address _nftContract, uint256 _nftId) external{
         require(nftOwner[_nftContract][_nftId] == msg.sender, "You are not nft owner");
 
         Bet storage bet = bets[_nftContract][_nftId][_betId];
         uint256 fee = bet.tokenAmount * sellFee / PRECISION;
+        if(bet.tokenContract == etherOracle){
+            bool sent;
+            bytes memory data;
+            (sent, data) = nftOwner[_nftContract][_nftId].call{value: bet.tokenAmount - fee}("");
+            require(sent, "Failed to send Ether");
 
-        IERC20Upgradeable(bet.tokenContract).transfer(nftOwner[_nftContract][_nftId], bet.tokenAmount - fee);
-        IERC20Upgradeable(bet.tokenContract).transfer(treasury, fee);
+            (sent, data) = treasury.call{value: fee}("");
+            require(sent, "Failed to send Ether");
+        }else
+        {
+            IERC20Upgradeable(bet.tokenContract).transfer(nftOwner[_nftContract][_nftId], bet.tokenAmount - fee);
+            IERC20Upgradeable(bet.tokenContract).transfer(treasury, fee);
+        }
 
-        
         IERC721Upgradeable(_nftContract).transferFrom(address(this), bet.bettor, _nftId);
         deleteNftFromAuction(_nftContract, _nftId, _betId);
-
     }
 
     function setPaymentToken(address _token, address _oracle, bool _isPaymentToken) external onlyOwner{
@@ -212,6 +245,10 @@ contract Marketplace is OwnableUpgradeable {
     
     function setTreasury(address _treasury) external onlyOwner{
         treasury  = _treasury;
+    }
+    
+    function setEtherOracle(address _etherOracle) external onlyOwner{
+        etherOracle  = _etherOracle;
     }
     // _______________ Internal functions _______________
 
